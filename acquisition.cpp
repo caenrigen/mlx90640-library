@@ -38,7 +38,7 @@ int main(int argc, char *argv[]){
     std::ofstream f;
     std::ofstream fTimings;
     std::ofstream fReadErrors;
-    std::string base_path="/home/pi/IoT-Seminar/data/";
+    std::string base_path="./";
 
     std::string thermalVals = "";
     
@@ -73,8 +73,9 @@ int main(int argc, char *argv[]){
         system(("mkdir " + base_path).c_str());
     }
     else 
-        base_path += "pippo";
-    base_path+="/";
+	std::cout << "First argument must be the acquisition name! Nothing done." << std::endl;
+    base_path += "/";
+    std::cout << "Output dir: " << base_path << std::endl;
     printf("Starting Loop...\r\n");
     while(1){
         do{
