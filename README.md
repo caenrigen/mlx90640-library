@@ -1,7 +1,7 @@
 # mlx90640-library
 MLX90640 library functions for use on Raspberry Pi
 
-Important Note: This code includes big changes to the API that were necessary for a project developed during the "IN4398 Internet of Things Seminar" course at TU Delft university. This repository will not be maintained and doesn't include the latest improvements of the original library.
+Important Note: This code includes big changes to the API that were necessary for a project developed during the "IN4398 Internet of Things Seminar" course at TU Delft University. This repository will not be maintained and doesn't include the latest improvements of the original library.
 
 We hope that the code examples provided here might be if use for someone else :) 
 
