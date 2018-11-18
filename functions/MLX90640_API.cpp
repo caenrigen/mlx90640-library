@@ -14,7 +14,10 @@
  * limitations under the License.
  *
  */
-#include <MLX90640_I2C_Driver.h>
+#include <thread>
+#include <chrono>
+
+#include <MLX90640_RPI_I2C_Driver.h>
 #include <MLX90640_API.h>
 #include <math.h>
 
@@ -34,13 +37,11 @@ void ExtractCILCParameters(uint16_t *eeData, paramsMLX90640 *mlx90640);
 int ExtractDeviatingPixels(uint16_t *eeData, paramsMLX90640 *mlx90640);
 int CheckAdjacentPixels(uint16_t pix1, uint16_t pix2);
 int CheckEEPROMValid(uint16_t *eeData);  
-float GetMedian(float *values, int n);
-int IsPixelBad(uint16_t pixel,paramsMLX90640 *params);
 
-  
+
 int MLX90640_DumpEE(uint8_t slaveAddr, uint16_t *eeData)
 {
-     return MLX90640_I2CRead(slaveAddr, 0x2400, 832, eeData);
+   return MLX90640_I2CRead(slaveAddr, 0x2400, 832, eeData);
 }
 
 int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
@@ -48,7 +49,7 @@ int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
     uint16_t dataReady = 1;
     uint16_t controlRegister1;
     uint16_t statusRegister;
-    int error = 1;
+    int error = 0;
     uint8_t cnt = 0;
     
     dataReady = 0;
@@ -61,7 +62,7 @@ int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
         }    
         dataReady = statusRegister & 0x0008;
     }       
-        
+    
     while(dataReady != 0 && cnt < 5)
     { 
         error = MLX90640_I2CWrite(slaveAddr, 0x8000, 0x0030);
@@ -69,13 +70,13 @@ int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
         {
             return error;
         }
-            
+        
         error = MLX90640_I2CRead(slaveAddr, 0x0400, 832, frameData); 
         if(error != 0)
         {
             return error;
         }
-                   
+        
         error = MLX90640_I2CRead(slaveAddr, 0x8000, 1, &statusRegister);
         if(error != 0)
         {
@@ -231,7 +232,7 @@ int MLX90640_SetChessMode(uint8_t slaveAddr)
     uint16_t controlRegister1;
     int value;
     int error;
-        
+    
     error = MLX90640_I2CRead(slaveAddr, 0x800D, 1, &controlRegister1);
     
     if(error == 0)
@@ -305,7 +306,7 @@ void MLX90640_CalculateTo(uint16_t *frameData, const paramsMLX90640 *params, flo
     }
     
     gain = params->gainEE / gain; 
-  
+    
 //------------------------- To calculation -------------------------------------    
     mode = (frameData[832] & 0x1000) >> 5;
     
@@ -327,71 +328,71 @@ void MLX90640_CalculateTo(uint16_t *frameData, const paramsMLX90640 *params, flo
     else
     {
       irDataCP[1] = irDataCP[1] - (params->cpOffset[1] + params->ilChessC[0]) * (1 + params->cpKta * (ta - 25)) * (1 + params->cpKv * (vdd - 3.3));
-    }
+  }
 
-    for( int pixelNumber = 0; pixelNumber < 768; pixelNumber++)
-    {
-        ilPattern = pixelNumber / 32 - (pixelNumber / 64) * 2; 
-        chessPattern = ilPattern ^ (pixelNumber - (pixelNumber/2)*2); 
-        conversionPattern = ((pixelNumber + 2) / 4 - (pixelNumber + 3) / 4 + (pixelNumber + 1) / 4 - pixelNumber / 4) * (1 - 2 * ilPattern);
-        
-        if(mode == 0)
-        {
-          pattern = ilPattern; 
-        }
-        else 
-        {
-          pattern = chessPattern; 
-        }               
-        
-        if(pattern == frameData[833])
-        {    
-            irData = frameData[pixelNumber];
-            if(irData > 32767)
-            {
-                irData = irData - 65536;
-            }
-            irData = irData * gain;
-            
-            irData = irData - params->offset[pixelNumber]*(1 + params->kta[pixelNumber]*(ta - 25))*(1 + params->kv[pixelNumber]*(vdd - 3.3));
-            if(mode !=  params->calibrationModeEE)
-            {
-              irData = irData + params->ilChessC[2] * (2 * ilPattern - 1) - params->ilChessC[1] * conversionPattern; 
-            }
-            
-            irData = irData / emissivity;
+  for( int pixelNumber = 0; pixelNumber < 768; pixelNumber++)
+  {
+    ilPattern = pixelNumber / 32 - (pixelNumber / 64) * 2; 
+    chessPattern = ilPattern ^ (pixelNumber - (pixelNumber/2)*2); 
+    conversionPattern = ((pixelNumber + 2) / 4 - (pixelNumber + 3) / 4 + (pixelNumber + 1) / 4 - pixelNumber / 4) * (1 - 2 * ilPattern);
     
-            irData = irData - params->tgc * irDataCP[subPage];
-            
-            alphaCompensated = (params->alpha[pixelNumber] - params->tgc * params->cpAlpha[subPage])*(1 + params->KsTa * (ta - 25));
-            
-            Sx = pow((double)alphaCompensated, (double)3) * (irData + alphaCompensated * taTr);
-            Sx = sqrt(sqrt(Sx)) * params->ksTo[1];
-            
-            To = sqrt(sqrt(irData/(alphaCompensated * (1 - params->ksTo[1] * 273.15) + Sx) + taTr)) - 273.15;
-                    
-            if(To < params->ct[1])
-            {
-                range = 0;
-            }
-            else if(To < params->ct[2])   
-            {
-                range = 1;            
-            }   
-            else if(To < params->ct[3])
-            {
-                range = 2;            
-            }
-            else
-            {
-                range = 3;            
-            }      
-            
-            To = sqrt(sqrt(irData / (alphaCompensated * alphaCorrR[range] * (1 + params->ksTo[range] * (To - params->ct[range]))) + taTr)) - 273.15;
-            
-            result[pixelNumber] = To;
-        }
+    if(mode == 0)
+    {
+      pattern = ilPattern; 
+  }
+  else 
+  {
+      pattern = chessPattern; 
+  }               
+  
+  if(pattern == frameData[833])
+  {    
+    irData = frameData[pixelNumber];
+    if(irData > 32767)
+    {
+        irData = irData - 65536;
     }
+    irData = irData * gain;
+    
+    irData = irData - params->offset[pixelNumber]*(1 + params->kta[pixelNumber]*(ta - 25))*(1 + params->kv[pixelNumber]*(vdd - 3.3));
+    if(mode !=  params->calibrationModeEE)
+    {
+      irData = irData + params->ilChessC[2] * (2 * ilPattern - 1) - params->ilChessC[1] * conversionPattern; 
+  }
+  
+  irData = irData / emissivity;
+  
+  irData = irData - params->tgc * irDataCP[subPage];
+  
+  alphaCompensated = (params->alpha[pixelNumber] - params->tgc * params->cpAlpha[subPage])*(1 + params->KsTa * (ta - 25));
+  
+  Sx = pow((double)alphaCompensated, (double)3) * (irData + alphaCompensated * taTr);
+  Sx = sqrt(sqrt(Sx)) * params->ksTo[1];
+  
+  To = sqrt(sqrt(irData/(alphaCompensated * (1 - params->ksTo[1] * 273.15) + Sx) + taTr)) - 273.15;
+  
+  if(To < params->ct[1])
+  {
+    range = 0;
+}
+else if(To < params->ct[2])   
+{
+    range = 1;            
+}   
+else if(To < params->ct[3])
+{
+    range = 2;            
+}
+else
+{
+    range = 3;            
+}      
+
+To = sqrt(sqrt(irData / (alphaCompensated * alphaCorrR[range] * (1 + params->ksTo[range] * (To - params->ct[range]))) + taTr)) - 273.15;
+
+result[pixelNumber] = To;
+}
+}
 }
 
 //------------------------------------------------------------------------------
@@ -424,7 +425,7 @@ void MLX90640_GetImage(uint16_t *frameData, const paramsMLX90640 *params, float 
     }
     
     gain = params->gainEE / gain; 
-  
+    
 //------------------------- Image calculation -------------------------------------    
     mode = (frameData[832] & 0x1000) >> 5;
     
@@ -446,47 +447,47 @@ void MLX90640_GetImage(uint16_t *frameData, const paramsMLX90640 *params, float 
     else
     {
       irDataCP[1] = irDataCP[1] - (params->cpOffset[1] + params->ilChessC[0]) * (1 + params->cpKta * (ta - 25)) * (1 + params->cpKv * (vdd - 3.3));
-    }
+  }
 
-    for( int pixelNumber = 0; pixelNumber < 768; pixelNumber++)
+  for( int pixelNumber = 0; pixelNumber < 768; pixelNumber++)
+  {
+    ilPattern = pixelNumber / 32 - (pixelNumber / 64) * 2; 
+    chessPattern = ilPattern ^ (pixelNumber - (pixelNumber/2)*2); 
+    conversionPattern = ((pixelNumber + 2) / 4 - (pixelNumber + 3) / 4 + (pixelNumber + 1) / 4 - pixelNumber / 4) * (1 - 2 * ilPattern);
+    
+    if(mode == 0)
     {
-        ilPattern = pixelNumber / 32 - (pixelNumber / 64) * 2; 
-        chessPattern = ilPattern ^ (pixelNumber - (pixelNumber/2)*2); 
-        conversionPattern = ((pixelNumber + 2) / 4 - (pixelNumber + 3) / 4 + (pixelNumber + 1) / 4 - pixelNumber / 4) * (1 - 2 * ilPattern);
-        
-        if(mode == 0)
-        {
-          pattern = ilPattern; 
-        }
-        else 
-        {
-          pattern = chessPattern; 
-        }
-        
-        if(pattern == frameData[833])
-        {    
-            irData = frameData[pixelNumber];
-            if(irData > 32767)
-            {
-                irData = irData - 65536;
-            }
-            irData = irData * gain;
-            
-            irData = irData - params->offset[pixelNumber]*(1 + params->kta[pixelNumber]*(ta - 25))*(1 + params->kv[pixelNumber]*(vdd - 3.3));
-            if(mode !=  params->calibrationModeEE)
-            {
-              irData = irData + params->ilChessC[2] * (2 * ilPattern - 1) - params->ilChessC[1] * conversionPattern; 
-            }
-            
-            irData = irData - params->tgc * irDataCP[subPage];
-            
-            alphaCompensated = (params->alpha[pixelNumber] - params->tgc * params->cpAlpha[subPage])*(1 + params->KsTa * (ta - 25));
-            
-            image = irData/alphaCompensated;
-            
-            result[pixelNumber] = image;
-        }
+      pattern = ilPattern; 
+  }
+  else 
+  {
+      pattern = chessPattern; 
+  }
+  
+  if(pattern == frameData[833])
+  {    
+    irData = frameData[pixelNumber];
+    if(irData > 32767)
+    {
+        irData = irData - 65536;
     }
+    irData = irData * gain;
+    
+    irData = irData - params->offset[pixelNumber]*(1 + params->kta[pixelNumber]*(ta - 25))*(1 + params->kv[pixelNumber]*(vdd - 3.3));
+    if(mode !=  params->calibrationModeEE)
+    {
+      irData = irData + params->ilChessC[2] * (2 * ilPattern - 1) - params->ilChessC[1] * conversionPattern; 
+  }
+  
+  irData = irData - params->tgc * irDataCP[subPage];
+  
+  alphaCompensated = (params->alpha[pixelNumber] - params->tgc * params->cpAlpha[subPage])*(1 + params->KsTa * (ta - 25));
+  
+  image = irData/alphaCompensated;
+  
+  result[pixelNumber] = image;
+}
+}
 }
 
 //------------------------------------------------------------------------------
@@ -547,108 +548,6 @@ int MLX90640_GetSubPageNumber(uint16_t *frameData)
     return frameData[833];    
 
 }    
-
-//------------------------------------------------------------------------------
-void MLX90640_BadPixelsCorrection(uint16_t *pixels, float *to, int mode, paramsMLX90640 *params)
-{   
-    float ap[4];
-    uint8_t pix;
-    uint8_t line;
-    uint8_t column;
-    
-    pix = 0;
-    while(pixels[pix]< 65535)
-    {
-        line = pixels[pix]>>5;
-        column = pixels[pix] - (line<<5);
-        
-        if(mode == 1)
-        {        
-            if(line == 0)
-            {
-                if(column == 0)
-                {        
-                    to[pixels[pix]] = to[33];                    
-                }
-                else if(column == 31)
-                {
-                    to[pixels[pix]] = to[62];                      
-                }
-                else
-                {
-                    to[pixels[pix]] = (to[pixels[pix]+31] + to[pixels[pix]+33])/2.0;                    
-                }        
-            }
-            else if(line == 23)
-            {
-                if(column == 0)
-                {
-                    to[pixels[pix]] = to[705];                    
-                }
-                else if(column == 31)
-                {
-                    to[pixels[pix]] = to[734];                       
-                }
-                else
-                {
-                    to[pixels[pix]] = (to[pixels[pix]-33] + to[pixels[pix]-31])/2.0;                       
-                }                       
-            } 
-            else if(column == 0)
-            {
-                to[pixels[pix]] = (to[pixels[pix]-31] + to[pixels[pix]+33])/2.0;                
-            }
-            else if(column == 31)
-            {
-                to[pixels[pix]] = (to[pixels[pix]-33] + to[pixels[pix]+31])/2.0;                
-            } 
-            else
-            {
-                ap[0] = to[pixels[pix]-33];
-                ap[1] = to[pixels[pix]-31];
-                ap[2] = to[pixels[pix]+31];
-                ap[3] = to[pixels[pix]+33];
-                to[pixels[pix]] = GetMedian(ap,4);
-            }                   
-        }
-        else
-        {        
-            if(column == 0)
-            {
-                to[pixels[pix]] = to[pixels[pix]+1];            
-            }
-            else if(column == 1 || column == 30)
-            {
-                to[pixels[pix]] = (to[pixels[pix]-1]+to[pixels[pix]+1])/2.0;                
-            } 
-            else if(column == 31)
-            {
-                to[pixels[pix]] = to[pixels[pix]-1];
-            } 
-            else
-            {
-                if(IsPixelBad(pixels[pix]-2,params) == 0 && IsPixelBad(pixels[pix]+2,params) == 0)
-                {
-                    ap[0] = to[pixels[pix]+1] - to[pixels[pix]+2];
-                    ap[1] = to[pixels[pix]-1] - to[pixels[pix]-2];
-                    if(fabs(ap[0]) > fabs(ap[1]))
-                    {
-                        to[pixels[pix]] = to[pixels[pix]-1] + ap[1];                        
-                    }
-                    else
-                    {
-                        to[pixels[pix]] = to[pixels[pix]+1] + ap[0];                        
-                    }
-                }
-                else
-                {
-                    to[pixels[pix]] = (to[pixels[pix]-1]+to[pixels[pix]+1])/2.0;                    
-                }            
-            }                      
-        } 
-        pix = pix + 1;    
-    }    
-}
 
 //------------------------------------------------------------------------------
 
@@ -966,21 +865,21 @@ void ExtractKtaPixelParameters(uint16_t *eeData, paramsMLX90640 *mlx90640)
         KtaReCo = KtaReCo - 256;
     }
     KtaRC[2] = KtaReCo;
-      
+    
     KtaRoCe = (eeData[55] & 0xFF00) >> 8;
     if (KtaRoCe > 127)
     {
         KtaRoCe = KtaRoCe - 256;
     }
     KtaRC[1] = KtaRoCe;
-      
+    
     KtaReCe = (eeData[55] & 0x00FF);
     if (KtaReCe > 127)
     {
         KtaReCe = KtaReCe - 256;
     }
     KtaRC[3] = KtaReCe;
-  
+    
     ktaScale1 = ((eeData[56] & 0x00F0) >> 4) + 8;
     ktaScale2 = (eeData[56] & 0x000F);
 
@@ -1028,21 +927,21 @@ void ExtractKvPixelParameters(uint16_t *eeData, paramsMLX90640 *mlx90640)
         KvReCo = KvReCo - 16;
     }
     KvT[2] = KvReCo;
-      
+    
     KvRoCe = (eeData[52] & 0x00F0) >> 4;
     if (KvRoCe > 7)
     {
         KvRoCe = KvRoCe - 16;
     }
     KvT[1] = KvRoCe;
-      
+    
     KvReCe = (eeData[52] & 0x000F);
     if (KvReCe > 7)
     {
         KvReCe = KvReCe - 16;
     }
     KvT[3] = KvReCe;
-  
+    
     kvScale = (eeData[56] & 0x0F00) >> 8;
 
 
@@ -1114,7 +1013,7 @@ void ExtractCPParameters(uint16_t *eeData, paramsMLX90640 *mlx90640)
     }
     kvScale = (eeData[56] & 0x0F00) >> 8;
     mlx90640->cpKv = cpKv / pow(2,(double)kvScale);
-       
+    
     mlx90640->cpAlpha[0] = alphaSP[0];
     mlx90640->cpAlpha[1] = alphaSP[1];
     mlx90640->cpOffset[0] = offsetSP[0];
@@ -1173,7 +1072,7 @@ int ExtractDeviatingPixels(uint16_t *eeData, paramsMLX90640 *mlx90640)
         mlx90640->brokenPixels[pixCnt] = 0xFFFF;
         mlx90640->outlierPixels[pixCnt] = 0xFFFF;
     }
-        
+    
     pixCnt = 0;    
     while (pixCnt < 768 && brokenPixCnt < 5 && outlierPixCnt < 5)
     {
@@ -1246,88 +1145,116 @@ int ExtractDeviatingPixels(uint16_t *eeData, paramsMLX90640 *mlx90640)
     
     
     return warn;
-       
+    
 }
 
 //------------------------------------------------------------------------------
 
- int CheckAdjacentPixels(uint16_t pix1, uint16_t pix2)
- {
-     int pixPosDif;
-     
-     pixPosDif = pix1 - pix2;
-     if(pixPosDif > -34 && pixPosDif < -30)
-     {
-         return -6;
-     } 
-     if(pixPosDif > -2 && pixPosDif < 2)
-     {
-         return -6;
-     } 
-     if(pixPosDif > 30 && pixPosDif < 34)
-     {
-         return -6;
-     }
-     
-     return 0;    
- }
- 
-//------------------------------------------------------------------------------
- 
- int CheckEEPROMValid(uint16_t *eeData)  
- {
-     int deviceSelect;
-     deviceSelect = eeData[10] & 0x0040;
-     if(deviceSelect == 0)
-     {
-         return 0;
-     }
-     
-     return -7;    
- } 
+int CheckAdjacentPixels(uint16_t pix1, uint16_t pix2)
+{
+   int pixPosDif;
+   
+   pixPosDif = pix1 - pix2;
+   if(pixPosDif > -34 && pixPosDif < -30)
+   {
+       return -6;
+   } 
+   if(pixPosDif > -2 && pixPosDif < 2)
+   {
+       return -6;
+   } 
+   if(pixPosDif > 30 && pixPosDif < 34)
+   {
+       return -6;
+   }
+   
+   return 0;    
+}
 
-//------------------------------------------------------------------------------
- 
-float GetMedian(float *values, int n)
- {
-    float temp;
-    
-    for(int i=0; i<n-1; i++)
-    {
-        for(int j=i+1; j<n; j++)
-        {
-            if(values[j] < values[i]) 
-            {                
-                temp = values[i];
-                values[i] = values[j];
-                values[j] = temp;
+ //------------------------------------------------------------------------------
+
+int CheckEEPROMValid(uint16_t *eeData)  
+{
+   int deviceSelect;
+   deviceSelect = eeData[10] & 0x0040;
+   if(deviceSelect == 0)
+   {
+       return 0;
+   }
+   
+   return -7;    
+}
+
+ // ============================================================================
+int MLX90640_InterpolateOutliers(uint16_t *frameData, uint16_t *eepromData)
+{
+    for(int x = 0; x < 768; x++){
+        int broken = eepromData[64 + x] == 0;
+        if (broken){
+            float val = 0;
+            int count = 0;
+            if(x - 33 > 0){
+                val += frameData[x - 33];
+                val += frameData[x - 31];
+                count += 2;
+            } else if (x - 31 > 0){
+                val += frameData[x - 31];
+                count += 1;
             }
+            if(x + 33 < 768){
+                val += frameData[x + 33];
+                val += frameData[x + 31];
+                count += 2;
+            } else if (x + 31 < 768){
+                val += frameData[x + 31];
+                count += 1;
+            }
+            frameData[x] = (uint16_t)((float)(val / count) * 1.0003);
         }
     }
-    
-    if(n%2==0) 
-    {
-        return ((values[n/2] + values[n/2 - 1]) / 2.0);
-        
-    } 
-    else 
-    {
-        return values[n/2];
-    }
-    
- }           
 
-//------------------------------------------------------------------------------
+    return 0;
+}
 
-int IsPixelBad(uint16_t pixel,paramsMLX90640 *params)
+int MLX90640_GetFullFrameData(uint8_t slaveAddr, uint16_t *frameData)
 {
-    for(int i=0; i<5; i++)
-    {
-        if(pixel == params->outlierPixels[i] || pixel == params->brokenPixels[i])
-        {
-            return 1;
-        }    
-    }   
+    uint16_t fullFrameReady;
+    uint16_t controlRegister1;
+    uint16_t statusRegister;
+    int error;
     
-    return 0;     
-}     
+    // while(!fullFrameReady)
+    // {
+    error = MLX90640_I2CRead(slaveAddr, 0x8000, 1, &statusRegister);
+    if(error) return error;
+        // Check if new data in RAM and subpage 1 has been measured
+    fullFrameReady = ((statusRegister & 0x0008)>>3) & !(statusRegister & 0x0001);
+    if(!fullFrameReady) return -100;
+    // }
+
+    // Read the full frame    
+    // Clear "new data available" bit
+    error = MLX90640_I2CWrite(slaveAddr, 0x8000, 0x0010);
+    if(error) return error;
+    
+    error = MLX90640_I2CRead(slaveAddr, 0x0400, 832, frameData); 
+    if(error) return error;
+    
+    error = MLX90640_I2CRead(slaveAddr, 0x800D, 1, &controlRegister1);
+    frameData[832] = controlRegister1;
+    frameData[833] = statusRegister & 0x0001;
+
+    return error;
+}
+
+int MLX90640_ConfReg1(uint8_t slaveAddr, uint16_t regValue){
+
+    uint16_t controlRegister1;
+    int error;
+
+    error = MLX90640_I2CRead(slaveAddr, MLX90640_CR1_ADDR, 1, &controlRegister1); 
+    if(error) return error;
+    // printf("CtrlReg 1: %X\n", controlRegister1);
+    // printf("Setting Control Register 1 to %X\n", ((controlRegister1 | 0b0001111110011101) & regValue));
+    return MLX90640_I2CWrite(slaveAddr, MLX90640_CR1_ADDR, (controlRegister1 | 0b0001111110011101) & regValue);
+};
